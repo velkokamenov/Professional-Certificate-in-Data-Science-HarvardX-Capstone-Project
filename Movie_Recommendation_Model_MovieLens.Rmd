@@ -1,0 +1,679 @@
+---
+title: "Develop Movie Recommendation Model Using the MovieLens Dataset - Professional Certificate in Data Science by HarvardX Capstone Project"
+author: "Velko Kamenov"
+date: "August 26, 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+### N.B.!!! - MikTex Installation is required in order to produce the pdf document - https://miktex.org/download
+
+# The script takes around 8 minutes to be run
+
+# Set global options valid for the whole markdown document
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 8, fig.height = 4)
+
+# This option disables scientifict notation for numbers visualization
+options(scipen = 999)
+
+# Install all needed for the project libraries if they are not found on the computer
+if(!require(rmarkdown)) install.packages("rmarkdown")
+if(!require(plyr)) install.packages("plyr")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(caret)) install.packages("caret")
+if(!require(tinytex)) install.packages("tinytex")
+if(!require(funModeling)) install.packages("funModeling")
+if(!require(stringr)) install.packages("stringr")
+if(!require(lubridate)) install.packages("lubridate")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(ggthemes)) install.packages("ggthemes")
+if(!require(mltools)) install.packages("mltools")
+if(!require(Hmisc)) install.packages("Hmisc")
+if(!require(data.table)) install.packages("data.table")
+
+
+# Import libraries
+library(rmarkdown)
+library(plyr)
+library(dplyr)
+library(caret)
+library(tinytex)
+library(funModeling)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+library(mltools)
+library(Hmisc)
+library(data.table)
+
+```
+
+## 1. Introduction
+
+The aim of this report is to examine the dataset with movies ratings MovieLens and build a recommendation system model based on this dataset. The goals is to find the best model for predicting movie ratings based on the inputs found in the MovieLens dataset and to be able to predict movie ratings with Root Mean Squared Error (RMSE) lower than 0.86490.
+
+In order to achieve this goal the dataset was examined statistically and visually, feature engineering was performed and different linear regression models were built on the modelling sample and tested on the validation sample. 
+
+A model with 4 predictor variables satisfied the goal to achieve RMSE bellow 0.86490 on the validation set. 
+
+The following 3 sections present the analysis and the final results of the model as well as suggestions for future model improvements. 
+
+## 2. Analysis
+
+In this section of the report are presented the data exploration, data preprocessing, feature engineering, feature relationships analysis as well as the modelling techniques used to generate the final predictive model. 
+
+### 2.1. Initial Data Exploration
+
+```{r Download Data for Analysis}
+
+# The following lines of code are provided by the instructor in Professional Certificate in Data Science - Rafael Irizarry. They construct the train and valition MovieLens datasets needed for the analysis
+
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+#movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+#                                           title = as.character(title),
+#                                           genres = as.character(genres))
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+# Remove unneeded objects
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+```
+
+
+Two datasets are provided as starting point for the project. A modelling dataset on which to perform model training and parameter tuning. This dataset consists of `r nrow(edx)` observations. And a hold-out validation set consisting of `r nrow(validation)` observations. The results of the algorithm and its final predictive power are going to be tested on the validation set. 
+
+The following table shows an overview of the 6 variables found in the training set. There are no missing, zero or Inf values among all variables. We have 4 numeric and 2 character type columns. 
+
+```{r Train Set Overview, results='hide'}
+# Check variables summary statistics with the df_status function from the funModeling package
+Var_Summary = df_status(edx)
+
+```
+
+```{r Train Set Overview Table}
+# include the summary table in the pdf report
+knitr::kable(Var_Summary, caption = "Train Set Variables Summary")
+
+```
+
+And a sample of 10 rows in the Train Set to get better sense of the data:
+
+```{r Top 10 rows Table}
+# extract top 10 rows of the raw data by movieID to include in the pdf report
+Top_10 = edx %>%
+  top_n(10, movieId)
+
+knitr::kable(Top_10, caption = "Sample of 10 rows in the Train Set")
+
+```
+
+The target variable we aim to predict with this dataset is rating which can take 10 unique values ranging from `r min(edx$rating)` to `r max(edx$rating)`: `r sort(unique(edx$rating))`.
+
+#### 2.2. Feature engineering
+
+We see that in the "title" column is stored the name of the movie as well as the year in which the movie came out. This information should come in two separate columns. We see that the year always comes after the movie name so it is easy just to extract the years as the symbols from the 2nd character going backwards to the 5th character going backwards. We also remove the years from the "title" column since the year is already extracted in a separate column. 
+
+Moreover we see that in the genres column for most movies there is more than one genre. It may be useful to extract only the leading genre - which can be found before the first "|" symbol. It is extracted in the column leading_genre.
+
+Here is how the data looks like after these operations:
+
+```{r Feature Engineering}
+
+# Extract release year from the title column
+edx_features = edx %>% 
+  mutate(release_year = as.numeric(str_sub(title,-5,-2)) # extract all between the last 5 characters and the last 2 characters in the title column and convert to numeric - this is the year the movie was released
+         , title = str_sub(title,-1*(length(title)),-7) # extract all from the beginning of the character to the last 7 characters in the title column
+         , Index_Genre_Delimiter = gregexpr("\\|",genres) # extract the positions of all "|" symbols which are delimiters between genres
+         ) %>%
+  rowwise() %>%
+  mutate(Index_First_Genre_Delimiter = Index_Genre_Delimiter[1]) %>% # extract only the first index - first position of "|" symbol
+  ungroup() %>%
+  # create a column containing just the first genre if more than one are present
+  mutate(leading_genre = case_when(Index_First_Genre_Delimiter != -1 ~ str_sub(genres,1,Index_First_Genre_Delimiter-1)
+                                   , TRUE ~ genres
+                                   )
+         ) %>%
+  # remove unneeded helper columns from the dataset
+  select(-Index_Genre_Delimiter,-Index_First_Genre_Delimiter)
+
+# Again extract top 10 of the wrangled data to include in the pdf report 
+Top_10_Year_Wrangled = edx_features %>%
+  top_n(10, movieId)
+
+# Include table in the report
+knitr::kable(Top_10_Year_Wrangled, caption = "Sample of 10 rows in the Train Set after year is extracted from the title column")
+
+
+```
+
+We can also observe that the information is the columns movieId and title is the same. The movieId is just a numerical nomenclature of the respective movie title. This is also suggested by the fact that the movieId column has `r n_distinct(edx$movieId)` distinct values while the title column has `r n_distinct(edx$title)` distinct values. So we are going to exclude the title column from the rest of the analysis since we extracted all relevant information from it and it does not give any additional information compared to movieId. 
+
+We also see that the timestamp column is formatted in numeric format rather than dates format. We can fix this with the as_datetime() function.
+
+Here is how the data looks after the last transformations: 
+
+```{r Feature Engineering Cont1}
+# Make initial feature conversions
+edx_features = edx_features %>%
+  select(-title) %>% # remove the title column as it is not needed anymore
+  mutate(timestamp = as_datetime(timestamp)) # convert the timestamp column from numeric to date
+
+# Again extract top 10 of the wrangled data to include in the pdf report 
+Top_10_Year_Wrangled = edx_features %>%
+  top_n(10, movieId)
+
+knitr::kable(Top_10_Year_Wrangled, caption = "Sample of 10 rows in the Train Set after title is removed and timestamp is converted to date")
+
+```
+
+We see that the first rating in the dataset was given on `r as.Date(min(edx_features$timestamp, na.rm = T))` and the last rating was given on `r as.Date(max(edx_features$timestamp, na.rm = T))`.
+
+Knowing this we can create a new variable which may be useful for the further analysis - years_after_release (YAR) which is going to me calculated by subtracting the movie release year from the last year a rating was given for the whole dataset. In this way we can get the variable years_after_release as of the point in time of the data in the MovieLens dataset. 
+
+We create also two more variables - Year in which the rating was given (YRG) and Years after the movie release before the rating was given (YRG_AR). 
+
+Another variable - number of times a movie is rated (NR) can also be interesting and is extracted.
+
+```{r Feature Engineering Cont2}
+
+# Create a variable YAR and YRG_AR
+edx_features = edx_features %>%
+  mutate(YRG = as.numeric(year(timestamp))) %>%
+  rowwise() %>% #perform the operation row wise
+  mutate(YAR = 2009-release_year # substract release year from 2009 because 2009 is the last year in which a rating was given
+         , YRG_AR = YRG - release_year
+         ) %>%
+  ungroup()  %>% # ungroup after the rowwise function was used
+  group_by(movieId) %>%
+  mutate(NR = n()) %>% # count the number of different ratings by movieId
+  ungroup()
+
+#Extract top 10 by movieID for visualization in report  
+Top_10_Year_Wrangled = edx_features %>%
+  select(-genres) %>%
+  mutate(timestamp = as.Date(timestamp)) %>%
+  top_n(10, movieId)
+
+knitr::kable(Top_10_Year_Wrangled, caption = "Sample of 10 rows in the Train Set after years since release variable is created")
+
+```
+
+Because the distinct values a rating can be are only 10 a scatter plot is not the best option to visualize relationships among the numeric variables and the rating. So in order to be able to visualize the data through boxplots the numeric features are going to be binned and boxplots created for the binned numeric varialbes vs. the rating. 
+
+```{r Feature Engineering Cont3}
+
+# Bin created vars in order to create box plots of binned numeric vars vs. rating and rating should be on the y axis of the boxplot - the mltools bin_data function is used for the binning
+edx_features = edx_features %>%
+  mutate(YAR_Binned = bin_data(YAR, bins = 10, binType = "quantile")
+         , YRG_Binned = bin_data(YRG, bins = 10, binType = "quantile")
+         , YRG_AR_Binned = bin_data(YRG_AR, bins = 10, binType = "quantile")
+         , userId_Binned = bin_data(userId, bins = 8, binType = "quantile")
+         , movieId_Binned = bin_data(movieId, bins = 10, binType = "quantile")
+         , NR_Binned = bin_data(NR, bins = 8, binType = "quantile")
+         )
+
+```
+
+
+#### 2.3. Features Relationship to Target
+
+As a next step of the analysis we examine the relationships among the predictor variables and the target variable via boxplots.  
+
+```{r Features Relationships 1}
+# Create a plot showing boxplot between years after release and rating
+edx_features[1:100000,] %>% # use only the first 100000 rows of data for better code performance
+  ggplot(aes(x = as.factor(YAR_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="Years after release vs. Rating (first 100K rows of data)",x="Years after Release", y = "Rating") +
+  theme_minimal()
+
+
+```
+
+We see that generally movies released before more than 16 years get higher average ratings. The older the movie the higher the rating it receives on average. 
+
+```{r Features Relationships 2}
+# Create a plot showing boxplot between Years from release before rating and rating
+edx_features[1:100000,] %>%
+  ggplot(aes(x = as.factor(YRG_AR_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="Years from release before rating vs. Rating (first 100 000 rows)",x="Years after Release before the rating was given", y = "Rating") +
+  theme_minimal()
+
+
+```
+
+We see that the more time passes between movie release year and the rating moment - the higher the rating the movie receives on average. 
+
+```{r Features Relationships 3}
+# Create a plot showing boxplot between Year when rating was given and rating
+edx_features[1:100000,] %>%
+  ggplot(aes(x = as.factor(YRG_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="Year when rating was given vs. Rating (first 100 000 rows)",x="Year when the rating was given", y = "Rating") +
+  theme_minimal()
+
+```
+
+We see that movies rated before 2004 on average receive higher ratings. 
+
+```{r Features Relationships 4}
+# Create a plot showing boxplot between uerId and rating based on 100 000 random rows of the dataset
+set.seed(1)
+smp_size = 100000
+random_sample = sample(seq_len(nrow(edx_features)), size = smp_size)
+
+edx_features[random_sample,] %>%
+  ggplot(aes(x = as.factor(userId_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="User ID vs. Rating (random 100 000 rows)",x="User ID", y = "Rating") +
+  theme_minimal()
+
+```
+
+The boxplot shows no strong visible relationship between userId and rating. 
+
+```{r Features Relationships 5}
+# Create a plot showing boxplot between movieId and rating
+
+edx_features[1:100000,] %>%
+  ggplot(aes(x = as.factor(movieId_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="Movie ID vs. Rating (first 100 000 rows)",x="Movie ID", y = "Rating") +
+  theme_minimal()
+
+
+```
+
+The boxplot shows no strong visible relationship between movieId and rating. 
+
+```{r Features Relationships 6}
+# Create a plot showing boxplot between Number of times a movie is rated and rating
+
+edx_features[1:100000,] %>%
+  ggplot(aes(x = as.factor(NR_Binned), y = rating)) +
+  geom_boxplot()+
+  labs(title="Number of times a movie is rated vs. Rating (first 100 000 rows)",x="Number of times rated", y = "Rating") +
+  theme_minimal()
+
+
+```
+
+We see that generally movies rated more times get higher average ratings. 
+
+```{r Features Relationships 7}
+# Create a plot showing boxplot between movie genre and rating
+
+Genres_Popularity = edx_features %>%
+  count(leading_genre) %>% 
+  arrange(desc(n))
+
+# Extract top 10 most popular genres
+Top_10_Genres = Genres_Popularity[1:10,]
+# Extract top 10 least popular genres
+Low_10_Genres = Genres_Popularity[11:20,]
+
+# Create two plots - this is done for better visualization - 20 categories at one plot are too much
+
+edx_features[1:100000,] %>%
+  filter(leading_genre %in% Top_10_Genres$leading_genre) %>%
+  ggplot(aes(x = as.factor(leading_genre), y = rating)) +
+  geom_boxplot()+
+  labs(title="Rating vs. Genre Top 10 Most Popular (first 100 000 rows)",x="Genre", y = "Rating") +
+  theme_minimal()
+
+edx_features[1:100000,] %>%
+  filter(leading_genre %in% Low_10_Genres$leading_genre) %>%
+  ggplot(aes(x = as.factor(leading_genre), y = rating)) +
+  geom_boxplot()+
+  labs(title="Rating vs. Genre Low 10 Most Popular (first 100 000 rows)",x="Genre", y = "Rating") +
+  theme_minimal()
+
+
+```
+
+We see that some genres like Crime, Documentary, Drama and Musical get higher average ratings than others. 
+
+#### 2.4. Correlations
+
+A linear regression modelling technique is going to be used to create a prediction model to forecast the rating. For this model predictor variables have to be uncorrelated. For this reason a correlation matrix to check if this condition holds true is calculated and examined.
+
+```{r Correlation Pearson}
+
+# Calculate person correlation coefficients for numeric variables and format the table to be visualized in the report
+
+corr_numeric_vars <- rcorr(as.matrix(edx_features %>%
+                          select(userId, movieId, release_year, YRG, YAR, YRG_AR, NR))
+                          , type = "pearson"
+                          )
+corr_numeric_vars = data.frame(corr_numeric_vars$r)
+
+corr_numeric_vars = setDT(corr_numeric_vars, keep.rownames = TRUE)[]
+
+corr_numeric_vars = corr_numeric_vars %>%
+  select(variable = rn, everything())
+
+corr_numeric_vars_rounded = round(corr_numeric_vars[,2:length(corr_numeric_vars)], 4) # round to the 4-th digit
+
+corr_numeric_vars = corr_numeric_vars %>%
+  select(variable) %>%
+  bind_cols(corr_numeric_vars_rounded)
+
+knitr::kable(corr_numeric_vars, caption = "Pearson correlation coefficient among numeric variables")
+
+```
+
+We see strong correlations among 3 variables - Release Year and Years Rating Given After Release (-0.96) and Years Rating Given After Release and Years after Release (0.96). This should be kept in mind and only one of these 3 variables should be used in a linear regression model. 
+
+```{r Correlation Spearman}
+# Calculate spearman correlation coefficients for numeric and categorical variables and format the table to be visualized in the report
+corr_numeric_categorical_vars <- rcorr(as.matrix(edx_features[1:100000,] %>%
+                          select(userId, movieId, release_year, YRG, YAR, YRG_AR, NR, leading_genre) %>%
+                          mutate(leading_genre = rank(leading_genre))
+                          )
+                          , type = "spearman"
+                          )
+
+corr_numeric_categorical_vars = data.frame(corr_numeric_categorical_vars$r)
+
+corr_numeric_categorical_vars = setDT(corr_numeric_categorical_vars, keep.rownames = TRUE)[]
+
+corr_numeric_categorical_vars = corr_numeric_categorical_vars %>%
+  select(variable = rn, everything())
+
+corr_numeric_categorical_vars_rounded = round(corr_numeric_categorical_vars[,2:length(corr_numeric_categorical_vars)], 4)
+
+corr_numeric_categorical_vars = corr_numeric_categorical_vars %>%
+  select(variable) %>%
+  bind_cols(corr_numeric_categorical_vars_rounded)
+
+knitr::kable(corr_numeric_categorical_vars, caption = "Spearman correlation coefficient among numeric and categorical variables (top 100 000 rows of data)")
+
+```
+
+Because the variable leading_genre is not numeric but categorical we need to calculate for it the spearman correlation coefficient with other variables. It shows no strong correlation between leading_genre and any other variable. The only high correlations remain between Release Year and Years Rating Given After Release and Years Rating Given After Release and Years after Release. 
+
+#### 2.5. Modelling
+
+The modelling technique used the build the movie recommendation system is linear regression. Its performance is compared to a naive approach of predicting just the average rating. Ireratively one variable at a time is added to the linear regression model and the resulting Mean Squared Errors are compared. 
+
+```{r Modelling}
+
+# Perform feature engineering on the validation set in order to validate model - the train and validation sets should have the same variables
+validation_features = validation %>%
+  mutate(release_year = as.numeric(str_sub(title,-5,-2)) # extract all between the last 5 characters and the last 2 characters in the title column and convert to numeric - this is the year the movie was released
+         , title = str_sub(title,-1*(length(title)),-7) # extract all from the beginning of the character to the last 7 characters in the title column
+         , Index_Genre_Delimiter = gregexpr("\\|",genres)
+         ) %>%
+  rowwise() %>%
+  mutate(Index_First_Genre_Delimiter = Index_Genre_Delimiter[1]) %>%
+  ungroup() %>%
+  mutate(leading_genre = case_when(Index_First_Genre_Delimiter != -1 ~ str_sub(genres,1,Index_First_Genre_Delimiter-1)
+                                   , TRUE ~ genres
+                                   )
+         ) %>%
+  select(-Index_Genre_Delimiter,-Index_First_Genre_Delimiter) %>%
+  select(-title) %>% # remove the title column as it is not needed anymore
+  mutate(timestamp = as_datetime(timestamp)) %>%
+  mutate(YRG = as.numeric(year(timestamp))) %>%
+  rowwise() %>% #perform the operation row wise
+  mutate(YAR = 2009-release_year
+         , YRG_AR = YRG - release_year
+         ) %>%
+  ungroup()  %>% # ungroup after the rowwise function was used
+  group_by(movieId) %>%
+  mutate(NR = n()) %>%
+  ungroup() 
+  
+# Calculate the average rating accross all movies and ratings
+mu_hat <- mean(edx_features$rating)
+
+# Estimate the RMSE of this naive model taking just the average rating
+naive_rmse <- RMSE(validation_features$rating, mu_hat)
+
+# Create an rmse_results data frame in which to store model names and RMSEs returned by the model
+rmse_results <- data_frame(Model = "Simple average", RMSE = naive_rmse)
+
+#fit <- lm(rating ~ as.factor(userId), data = edx) # This is not used because the dataset is too large and R runs out of RAM
+
+### 4 different linear regression models are constructed and validated ###
+
+# Model 1 - build model and create predictions on movieId a predictor variable
+
+mu <- mean(edx_features$rating) 
+movie_avgs <- edx_features %>% 
+     group_by(movieId) %>% 
+     summarise(b_i = mean(rating - mu)) %>%
+     ungroup()
+
+# make predictions on the validation set
+predicted_ratings <- mu + validation_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     .$b_i
+
+# calculate RMSE 
+model_1_rmse <- RMSE(predicted_ratings, validation_features$rating)
+
+# Bind results to model results data frame
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="Movie Effect Model",
+                                     RMSE = model_1_rmse ))
+
+# Model 2 - build model and create predictions on movieId and uderId as predictor variables
+user_avgs <- edx_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     group_by(userId) %>%
+     summarise(b_u = mean(rating - mu - b_i))
+
+# make predictions on the validation set
+predicted_ratings <- validation_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     mutate(pred = mu + b_i + b_u) %>%
+     .$pred
+
+# Calculate RMSE
+model_2_rmse <- RMSE(predicted_ratings, validation_features$rating)
+# Bind results to model results data frame
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="Movie + User Effects Model",  
+                                     RMSE = model_2_rmse ))
+
+# Model 3 - build model and create predictions on movieId, uderId and year after release as predictor variables
+yar_avgs <- edx_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     group_by(YAR) %>%
+     summarise(b_yar = mean(rating - mu - b_i - b_u))
+
+# make predictions on the validation set
+predicted_ratings <- validation_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     left_join(yar_avgs, by='YAR') %>%
+     mutate(pred = mu + b_i + b_u + b_yar) %>%
+     .$pred
+
+# Calculate RMSE
+model_3_rmse <- RMSE(predicted_ratings, validation_features$rating)
+# Bind results to model results data frame
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="Movie + User + Year after Release Effects Model",  
+                                     RMSE = model_3_rmse ))
+
+
+# Model 4 - build model and create predictions on movieId, uderId, year after release and genre as predictor variables
+genre_avgs <- edx_features %>%
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     left_join(yar_avgs, by='YAR') %>%
+     group_by(genres) %>%
+     summarise(b_gen = mean(rating - mu - b_i - b_u - b_yar))
+
+# make predictions on the validation set
+predicted_ratings <- validation_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     left_join(yar_avgs, by='YAR') %>%
+     left_join(genre_avgs, by='genres') %>%
+     mutate(pred = mu + b_i + b_u + b_yar + b_gen) %>%
+     .$pred
+
+# Calculate RMSE
+model_4_rmse <- RMSE(predicted_ratings, validation_features$rating)
+# Bind results to model results data frame
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="Movie + User + Year after Release + Genre Effects Model",  
+                                     RMSE = model_4_rmse ))
+
+```
+
+The results of the 4 different models tested are presented in the following table:
+
+```{r Models Comparison}
+# Create table to show in report for model comparison
+knitr::kable(rmse_results, caption = "Linear Regression Models RMSE Comparison") 
+
+```
+
+The model with the lowest RMSE is the last one which includes as predictor variables 4 predictors - movieId, userId, Years after Release and Genre. 
+
+As we see from the graph the first two predictor variables - movieId and userId lead to the biggest drop in RMSE while the next two variables - Years after release and Genre lead to slight improvements in RMSE.
+
+
+```{r Plot models RMSE}
+# Create a visualization of the drop in RMSE by model
+rmse_results_numbered = rmse_results %>%
+  mutate(Model_Number = c("Model 1: Naive","Model 2: 1 Var","Model 3: 2 Vars","Model 4: 3 Vars","Model 5: 4 Vars"))
+
+ rmse_results_numbered %>%
+  ggplot(aes(x = Model_Number, y = RMSE
+             , group = 1
+             )
+         ) +
+  geom_line() +
+  geom_point() +
+  labs(title="Models Fitted RMSE",x="Model", y = "RMSE") +
+  theme_minimal()
+
+```
+
+
+## 3. Results
+
+This section presents the final results of the analysis and modelling. The best model tested on the validation set was with 4 predictor variables - movieId, userId, Years after Release and Genre. It resulted in RMSE of `r min(rmse_results$RMSE)`. This RMSE is bellow 0.86490 which satisfies the project aim. 
+
+```{r Results Part 1}
+# show a table with the model with lowest RMSE
+knitr::kable(rmse_results[5,], caption = "Linear Regression Model with lowest RMSE")
+
+```
+
+The residuals plot suggests that lower observed ratings are predicted too pesimistic, while good ratings are predicted too optimistic. 
+
+```{r Residuals}
+# Create table with residual values - the errors compared to the predictions
+# These residuals should be random in theory
+residuals <- validation_features %>% 
+     left_join(movie_avgs, by='movieId') %>%
+     left_join(user_avgs, by='userId') %>%
+     left_join(yar_avgs, by='YAR') %>%
+     left_join(genre_avgs, by='genres') %>%
+     mutate(pred = mu + b_i + b_u + b_yar + b_gen
+            , residual = rating - pred
+            ) %>%
+  select(rating, pred, residual)
+
+# Make the plot based on the first 100000 rows of data
+residuals[1:100000,] %>%
+  ggplot(aes(x = rating, y = residual)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  labs(title="Residuals Plot - Validation Sample",x="Rating", y = "Residuals") +
+  theme_minimal()
+
+```
+
+```{r R Squared}
+# Calculate the R Squared of the model
+R_Squared = cor(residuals$pred, residuals$rating) ^ 2
+
+# Calculate the Adjusted R Squared of the model
+Adjusted_R_Squared = 1 - (((1-R_Squared)*(nrow(residuals)-1))/(nrow(residuals)-2-1))
+
+```
+
+The values of R-Squared(`r round(R_Squared, 3)`) and Adjusted R-Squared(`r round(Adjusted_R_Squared,3)`) also suggest that a lot of the variation is not captured by the model. This means that there are variables influecing the rating that are not present in the dataset. 
+
+
+## 4. Conclusion
+
+The MovieLens dataset used for the analysis in this paper includes one target variable - rating - and 4 predictor variables. These predictor variables were analysed statistically and visually and also feature engineering to create more variables was performed. 
+
+A linear regression model was developed to make forecasts about the rating and a model with 4 predictor variables - movieId, userId, Years after Release and Genre led to the lowest RMSE. The RMSE of this model is `r min(rmse_results$RMSE)` which satisfies the project aim of building a model with RMSE bellow 0.86490. 
+
+However the residuals plot and R-Squared estimate (`r round(R_Squared,3)`) suggest that the model misses important information which is not found in the dataset and would be useful for further model enhancement. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
